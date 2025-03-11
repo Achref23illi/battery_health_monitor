@@ -1,333 +1,517 @@
 import tkinter as tk
-from tkinter import scrolledtext, ttk, messagebox, Frame
+from tkinter import ttk, messagebox, filedialog
+import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import os
+import threading
 import webbrowser
-from src.battery_repport import generate_battery_report, parse_battery_report
-from src.visualization import plot_capacity_history, create_battery_health_gauge
+import sys
+from datetime import datetime
 
-class BatteryHealthMonitorApp:
+# Import our modules - adjust paths if needed
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from battery_repport import generate_battery_report, parse_battery_report
+from visualization import create_battery_health_gauge, plot_capacity_history
+
+class BatteryReportApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Battery Health Monitor")
-        self.root.geometry("1100x800")
+        self.root.title("Battery Health Analyzer")
+        self.root.geometry("900x700")
         self.root.minsize(800, 600)
         
-        # Set theme colors
-        self.bg_color = "#f5f5f5"
-        self.accent_color = "#4a86e8"
-        self.header_color = "#2d5bb9"
-        self.success_color = "#4CAF50"
-        self.warning_color = "#FFC107"
-        self.error_color = "#F44336"
-        
-        # Configure root window
-        self.root.configure(bg=self.bg_color)
-        
+        # Set application icon if available
+        try:
+            self.root.iconbitmap("battery_icon.ico")
+        except:
+            pass
+            
         # Variables
         self.report_path = None
         self.html_content = None
+        self.loading = False
         
-        # Create main frame
-        self.main_frame = tk.Frame(self.root, bg=self.bg_color)
-        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Create the main frame
+        self.main_frame = ttk.Frame(self.root, padding=10)
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Create header
-        self.create_header()
-        
-        # Create content
-        self.create_content()
-        
-        # Create status bar
-        self.create_status_bar()
-    
-    def create_header(self):
-        """Create the header section with app title and buttons"""
-        header_frame = tk.Frame(self.main_frame, bg=self.header_color)
-        header_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # App title
-        title_label = tk.Label(header_frame, text="Battery Health Monitor", 
-                               fg="white", bg=self.header_color, font=("Arial", 16, "bold"))
-        title_label.pack(side=tk.LEFT, padx=10, pady=10)
-        
-        # Button frame
-        button_frame = tk.Frame(header_frame, bg=self.header_color)
-        button_frame.pack(side=tk.RIGHT, padx=10, pady=10)
-        
-        # Generate Report button
-        generate_button_style = {'bg': self.success_color, 'fg': 'white', 
-                                'activebackground': '#388E3C', 'activeforeground': 'white',
-                                'font': ('Arial', 10, 'bold'), 'bd': 0, 'padx': 15, 'pady': 5}
-        self.generate_button = tk.Button(button_frame, text="Generate Report", 
-                                        command=self.generate_report, **generate_button_style)
-        self.generate_button.pack(side=tk.LEFT, padx=(0, 10))
-        
-        # View HTML button
-        view_button_style = {'bg': self.accent_color, 'fg': 'white', 
-                           'activebackground': '#3a6bc2', 'activeforeground': 'white',
-                           'font': ('Arial', 10), 'bd': 0, 'padx': 10, 'pady': 5}
-        self.view_button = tk.Button(button_frame, text="View Full HTML Report", 
-                                   command=self.open_html_report, **view_button_style)
-        self.view_button.pack(side=tk.LEFT)
-        
-    def create_content(self):
-        """Create the main content area with tabs"""
         # Create notebook for tabs
         self.notebook = ttk.Notebook(self.main_frame)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Create dashboard tab
-        self.dashboard_tab = tk.Frame(self.notebook, bg=self.bg_color)
+        # Create tabs
+        self.dashboard_tab = ttk.Frame(self.notebook)
+        self.details_tab = ttk.Frame(self.notebook)
+        self.raw_data_tab = ttk.Frame(self.notebook)
+        
         self.notebook.add(self.dashboard_tab, text="Dashboard")
+        self.notebook.add(self.details_tab, text="Details")
+        self.notebook.add(self.raw_data_tab, text="Raw Report")
         
-        # Create details tab
-        self.details_tab = tk.Frame(self.notebook, bg=self.bg_color)
-        self.notebook.add(self.details_tab, text="Battery Details")
-        
-        # Create history tab
-        self.history_tab = tk.Frame(self.notebook, bg=self.bg_color)
-        self.notebook.add(self.history_tab, text="Usage History")
-        
-        # Create HTML preview tab
-        self.html_tab = tk.Frame(self.notebook, bg=self.bg_color)
-        self.notebook.add(self.html_tab, text="HTML Preview")
-        
-        # Setup dashboard tab
+        # Setup the UI
         self.setup_dashboard()
-        
-        # Setup details tab
         self.setup_details_tab()
+        self.setup_raw_data_tab()
         
-        # Setup history tab
-        self.setup_history_tab()
+        # Control frame at the bottom
+        self.control_frame = ttk.Frame(self.main_frame)
+        self.control_frame.pack(fill=tk.X, pady=10)
         
-        # Setup HTML preview tab
-        self.setup_html_preview()
-    
-    def setup_dashboard(self):
-        """Setup the dashboard tab with summary and visualizations"""
-        # Create two frames side by side
-        left_frame = tk.Frame(self.dashboard_tab, bg=self.bg_color)
-        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        right_frame = tk.Frame(self.dashboard_tab, bg=self.bg_color)
-        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        # Summary section in left frame
-        summary_frame = tk.LabelFrame(left_frame, text="Battery Summary", bg=self.bg_color, 
-                                     font=("Arial", 11, "bold"))
-        summary_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        # Summary text widget
-        self.summary_text = scrolledtext.ScrolledText(summary_frame, wrap=tk.WORD, 
-                                                    bg="white", font=("Arial", 11))
-        self.summary_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        # Battery health gauge in right frame (top)
-        self.gauge_frame = tk.LabelFrame(right_frame, text="Battery Health", bg=self.bg_color, 
-                                       font=("Arial", 11, "bold"))
-        self.gauge_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        # Capacity history chart in right frame (bottom)
-        self.capacity_frame = tk.LabelFrame(right_frame, text="Capacity History", bg=self.bg_color, 
-                                          font=("Arial", 11, "bold"))
-        self.capacity_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-    
-    def setup_details_tab(self):
-        """Setup the details tab with all battery information"""
-        details_frame = tk.Frame(self.details_tab, bg=self.bg_color)
-        details_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Metrics and details section
-        self.details_text = scrolledtext.ScrolledText(details_frame, wrap=tk.WORD, 
-                                                    bg="white", font=("Arial", 11))
-        self.details_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-    
-    def setup_history_tab(self):
-        """Setup the history tab with usage history table"""
-        history_frame = tk.Frame(self.history_tab, bg=self.bg_color)
-        history_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Create Treeview for usage history
-        columns = ("Date", "Active", "Energy Drain", "Energy Usage")
-        self.history_tree = ttk.Treeview(history_frame, columns=columns, show="headings")
-        
-        # Configure columns
-        for col in columns:
-            self.history_tree.heading(col, text=col)
-            if col == "Date":
-                self.history_tree.column(col, width=150, anchor="w")
-            else:
-                self.history_tree.column(col, width=120, anchor="center")
-        
-        # Add scrollbar
-        scrollbar = ttk.Scrollbar(history_frame, orient="vertical", command=self.history_tree.yview)
-        self.history_tree.configure(yscrollcommand=scrollbar.set)
-        
-        # Pack widgets
-        self.history_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-    
-    def setup_html_preview(self):
-        """Setup the HTML preview tab"""
-        html_frame = tk.Frame(self.html_tab, bg=self.bg_color)
-        html_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Create text widget with horizontal and vertical scrollbars
-        self.html_text = scrolledtext.ScrolledText(html_frame, wrap=tk.NONE, 
-                                                 bg="white", font=("Courier New", 10))
-        self.html_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Add horizontal scrollbar
-        h_scrollbar = ttk.Scrollbar(html_frame, orient="horizontal", command=self.html_text.xview)
-        self.html_text.configure(xscrollcommand=h_scrollbar.set)
-        h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
-    
-    def create_status_bar(self):
-        """Create status bar at the bottom"""
-        self.status_bar = tk.Label(self.root, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
+        # Status bar
+        self.status_var = tk.StringVar(value="Ready. Click 'Generate Report' to start.")
+        self.status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
-    
-    def generate_report(self):
-        """Generate battery report and update the UI"""
-        try:
-            self.status_bar.config(text="Generating battery report...")
-            self.root.update()
-            
-            # Generate the report
-            self.report_path = generate_battery_report()
-            
-            # Parse the report
-            metrics, details, usage_history, capacity_data, html_content = parse_battery_report(self.report_path)
-            self.html_content = html_content
-            
-            # Update UI
-            self.update_dashboard(metrics, details, capacity_data)
-            self.update_details(metrics, details)
-            self.update_history(usage_history)
-            self.update_html_preview(html_content)
-            
-            # Show success message
-            self.status_bar.config(text=f"Report generated successfully at {self.report_path}")
-            messagebox.showinfo("Success", "Battery report generated and parsed successfully!")
-            
-        except Exception as e:
-            self.status_bar.config(text=f"Error: {str(e)}")
-            messagebox.showerror("Error", f"Failed to generate battery report: {str(e)}")
-    
-    def update_dashboard(self, metrics, details, capacity_data):
-        """Update the dashboard tab with battery data"""
-        # Clear existing widgets in visualization frames
-        for widget in self.gauge_frame.winfo_children():
-            widget.destroy()
         
-        for widget in self.capacity_frame.winfo_children():
-            widget.destroy()
+        # Buttons
+        self.progress = ttk.Progressbar(self.control_frame, mode="indeterminate")
+        self.progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
         
-        # Update summary text
-        self.summary_text.delete(1.0, tk.END)
+        self.generate_btn = ttk.Button(self.control_frame, text="Generate Report", command=self.generate_report)
+        self.generate_btn.pack(side=tk.LEFT, padx=5)
         
-        # Add header
-        self.summary_text.insert(tk.END, "BATTERY SUMMARY\n", "header")
-        self.summary_text.tag_configure("header", font=("Arial", 12, "bold"))
-        self.summary_text.insert(tk.END, "\n")
+        self.load_btn = ttk.Button(self.control_frame, text="Load Existing Report", command=self.load_report)
+        self.load_btn.pack(side=tk.LEFT, padx=5)
         
-        # Add metrics
-        for key, value in metrics.items():
-            self.summary_text.insert(tk.END, f"{key}: ", "label")
-            self.summary_text.insert(tk.END, f"{value}\n", "value")
+        self.export_btn = ttk.Button(self.control_frame, text="Export Data", command=self.export_data, state=tk.DISABLED)
+        self.export_btn.pack(side=tk.LEFT, padx=5)
         
-        self.summary_text.tag_configure("label", font=("Arial", 11, "bold"))
-        self.summary_text.tag_configure("value", font=("Arial", 11))
-        
-        # Add some selected details
-        self.summary_text.insert(tk.END, "\n")
-        important_keys = ["Manufacturer", "Serial Number", "Chemistry", "Name"]
-        for key, value in details.items():
-            if any(important in key for important in important_keys):
-                self.summary_text.insert(tk.END, f"{key}: ", "label")
-                self.summary_text.insert(tk.END, f"{value}\n", "value")
-        
-        # Create battery health gauge
-        try:
-            design_capacity = int(metrics.get("Design Capacity", "0 mWh").split()[0])
-            full_charge = int(metrics.get("Full Charge Capacity", "0 mWh").split()[0])
-            
-            gauge_fig = create_battery_health_gauge(full_charge, design_capacity)
-            gauge_canvas = FigureCanvasTkAgg(gauge_fig, master=self.gauge_frame)
-            gauge_canvas.draw()
-            gauge_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        except Exception as e:
-            print(f"Error creating gauge: {e}")
-        
-        # Create capacity history chart
-        try:
-            periods, full_charges, design_capacities = capacity_data
-            if periods:
-                capacity_fig = plot_capacity_history(periods, full_charges, design_capacities)
-                capacity_canvas = FigureCanvasTkAgg(capacity_fig, master=self.capacity_frame)
-                capacity_canvas.draw()
-                capacity_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        except Exception as e:
-            print(f"Error creating capacity chart: {e}")
-    
-    def update_details(self, metrics, details):
-        """Update the details tab with all battery information"""
-        self.details_text.delete(1.0, tk.END)
-        
-        # Add metrics section
-        self.details_text.insert(tk.END, "BATTERY METRICS\n", "section")
-        self.details_text.tag_configure("section", font=("Arial", 12, "bold"))
-        self.details_text.insert(tk.END, "\n")
-        
-        for key, value in metrics.items():
-            self.details_text.insert(tk.END, f"{key}: ", "label")
-            self.details_text.insert(tk.END, f"{value}\n", "value")
-        
-        # Add additional details
-        self.details_text.insert(tk.END, "\n")
-        self.details_text.insert(tk.END, "ADDITIONAL DETAILS\n", "section")
-        self.details_text.insert(tk.END, "\n")
-        
-        for key, value in details.items():
-            self.details_text.insert(tk.END, f"{key}: ", "label")
-            self.details_text.insert(tk.END, f"{value}\n", "value")
-        
-        self.details_text.tag_configure("label", font=("Arial", 11, "bold"))
-        self.details_text.tag_configure("value", font=("Arial", 11))
-    
-    def update_history(self, usage_history):
-        """Update the history tab with usage data"""
-        # Clear existing data
-        for item in self.history_tree.get_children():
-            self.history_tree.delete(item)
-        
-        # Add new data
-        for usage in usage_history:
-            values = []
-            for col in self.history_tree["columns"]:
-                values.append(usage.get(col, ""))
-            
-            self.history_tree.insert("", "end", values=values)
-    
-    def update_html_preview(self, html_content):
-        """Update the HTML preview tab with report content"""
-        self.html_text.delete(1.0, tk.END)
-        self.html_text.insert(tk.END, html_content)
-    
-    def open_html_report(self):
-        """Open the full HTML report in default browser"""
-        if self.report_path and os.path.exists(self.report_path):
-            webbrowser.open(f"file://{self.report_path}")
-        else:
-            messagebox.showinfo("No Report", "Please generate a battery report first.")
+        # Initial setup
+        self.progress.pack_forget()  # Hide progress initially
 
-# Function to create and run the application
-def run_app():
+    def setup_dashboard(self):
+        # Top frame for metrics
+        top_frame = ttk.Frame(self.dashboard_tab)
+        top_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        # Health gauge frame
+        self.gauge_frame = ttk.LabelFrame(top_frame, text="Battery Health")
+        self.gauge_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        
+        # Key metrics frame
+        metrics_frame = ttk.LabelFrame(top_frame, text="Key Metrics")
+        metrics_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        
+        # Placeholder for metrics
+        self.metrics = {}
+        for i, label in enumerate(["Design Capacity", "Full Charge Capacity", "Cycle Count", "Battery Health"]):
+            lbl = ttk.Label(metrics_frame, text=f"{label}:", font=("", 10, "bold"))
+            lbl.grid(row=i, column=0, sticky=tk.W, padx=10, pady=5)
+            
+            val = ttk.Label(metrics_frame, text="N/A")
+            val.grid(row=i, column=1, sticky=tk.W, padx=10, pady=5)
+            self.metrics[label] = val
+        
+        # Bottom frame for chart
+        bottom_frame = ttk.LabelFrame(self.dashboard_tab, text="Capacity History")
+        bottom_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Placeholder for gauge
+        self.gauge_placeholder = ttk.Label(self.gauge_frame, text="Generate a report to see battery health")
+        self.gauge_placeholder.pack(padx=20, pady=30)
+        self.gauge_canvas = None
+        
+        # Placeholder for chart
+        self.chart_placeholder = ttk.Label(bottom_frame, text="Generate a report to see capacity history")
+        self.chart_placeholder.pack(padx=20, pady=50)
+        self.chart_canvas = None
+
+    def setup_details_tab(self):
+        # Create a frame for the details
+        self.details_frame = ttk.Frame(self.details_tab)
+        self.details_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Add two sections: Battery Details and Usage History
+        details_pane = ttk.PanedWindow(self.details_frame, orient=tk.HORIZONTAL)
+        details_pane.pack(fill=tk.BOTH, expand=True)
+        
+        # Battery details section
+        self.battery_details_frame = ttk.LabelFrame(details_pane, text="Battery Details")
+        details_pane.add(self.battery_details_frame, weight=50)
+        
+        # Scrollable frame for battery details
+        details_canvas = tk.Canvas(self.battery_details_frame)
+        details_scrollbar = ttk.Scrollbar(self.battery_details_frame, orient="vertical", command=details_canvas.yview)
+        details_canvas.configure(yscrollcommand=details_scrollbar.set)
+        
+        details_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        details_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        self.details_content_frame = ttk.Frame(details_canvas)
+        details_canvas.create_window((0, 0), window=self.details_content_frame, anchor=tk.NW)
+        
+        self.details_content_frame.bind("<Configure>", lambda e: details_canvas.configure(scrollregion=details_canvas.bbox("all")))
+        
+        # Usage history section
+        self.usage_history_frame = ttk.LabelFrame(details_pane, text="Battery Usage History")
+        details_pane.add(self.usage_history_frame, weight=50)
+        
+        # Treeview for usage history
+        self.usage_tree = ttk.Treeview(self.usage_history_frame)
+        usage_scrollbar = ttk.Scrollbar(self.usage_history_frame, orient="vertical", command=self.usage_tree.yview)
+        self.usage_tree.configure(yscrollcommand=usage_scrollbar.set)
+        
+        usage_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.usage_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Add placeholder text
+        ttk.Label(self.details_content_frame, text="Generate a report to see battery details").pack(pady=20, padx=20)
+        
+        # Add placeholder columns to treeview
+        self.usage_tree["columns"] = ("date", "duration", "energy")
+        self.usage_tree.column("#0", width=0, stretch=tk.NO)
+        self.usage_tree.column("date", anchor=tk.W, width=120)
+        self.usage_tree.column("duration", anchor=tk.W, width=120)
+        self.usage_tree.column("energy", anchor=tk.W, width=120)
+        
+        self.usage_tree.heading("#0", text="", anchor=tk.W)
+        self.usage_tree.heading("date", text="Date", anchor=tk.W)
+        self.usage_tree.heading("duration", text="Duration", anchor=tk.W)
+        self.usage_tree.heading("energy", text="Energy Used", anchor=tk.W)
+
+    def setup_raw_data_tab(self):
+        # Create a frame for the raw HTML view
+        raw_frame = ttk.Frame(self.raw_data_tab)
+        raw_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Add controls at the top
+        controls_frame = ttk.Frame(raw_frame)
+        controls_frame.pack(fill=tk.X)
+        
+        ttk.Label(controls_frame, text="Report Location:").pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.report_location_var = tk.StringVar(value="No report generated yet")
+        location_label = ttk.Label(controls_frame, textvariable=self.report_location_var, foreground="blue", cursor="hand2")
+        location_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        location_label.bind("<Button-1>", self.open_report_location)
+        
+        open_btn = ttk.Button(controls_frame, text="Open in Browser", command=self.open_in_browser)
+        open_btn.pack(side=tk.LEFT, padx=5)
+        
+        refresh_btn = ttk.Button(controls_frame, text="Refresh", command=self.refresh_raw_data)
+        refresh_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Add text area with scrollbars
+        text_frame = ttk.Frame(raw_frame)
+        text_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        
+        self.raw_text = tk.Text(text_frame, wrap=tk.NONE)
+        y_scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.raw_text.yview)
+        x_scrollbar = ttk.Scrollbar(text_frame, orient=tk.HORIZONTAL, command=self.raw_text.xview)
+        
+        self.raw_text.configure(yscrollcommand=y_scrollbar.set, xscrollcommand=x_scrollbar.set)
+        
+        y_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        x_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
+        self.raw_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Make text read-only
+        self.raw_text.configure(state=tk.DISABLED)
+        
+        # Add placeholder text
+        self.set_raw_text_content("Generate a report to see raw HTML data")
+
+    def set_raw_text_content(self, content):
+        self.raw_text.configure(state=tk.NORMAL)
+        self.raw_text.delete(1.0, tk.END)
+        self.raw_text.insert(tk.END, content)
+        self.raw_text.configure(state=tk.DISABLED)
+
+    def open_report_location(self, event=None):
+        if self.report_path and os.path.exists(self.report_path):
+            # Open the folder containing the report
+            folder_path = os.path.dirname(os.path.abspath(self.report_path))
+            if sys.platform == 'win32':
+                os.startfile(folder_path)
+            elif sys.platform == 'darwin':  # macOS
+                os.system(f'open "{folder_path}"')
+            else:  # Linux
+                os.system(f'xdg-open "{folder_path}"')
+
+    def open_in_browser(self):
+        if self.report_path and os.path.exists(self.report_path):
+            webbrowser.open(f"file://{os.path.abspath(self.report_path)}")
+        else:
+            messagebox.showinfo("No Report", "No battery report has been generated yet.")
+
+    def refresh_raw_data(self):
+        if self.report_path and os.path.exists(self.report_path):
+            try:
+                with open(self.report_path, "r", encoding="utf-8") as f:
+                    html_content = f.read()
+                self.set_raw_text_content(html_content)
+                self.html_content = html_content
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load report: {e}")
+
+    def generate_report(self):
+        if self.loading:
+            return
+            
+        self.loading = True
+        self.progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        self.progress.start()
+        self.status_var.set("Generating battery report...")
+        self.generate_btn.configure(state=tk.DISABLED)
+        self.load_btn.configure(state=tk.DISABLED)
+        
+        def process():
+            try:
+                # Generate the report
+                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                output_path = os.path.join(os.path.expanduser("~"), f"battery-report-{timestamp}.html")
+                
+                self.report_path = generate_battery_report(output_path)
+                self.report_location_var.set(self.report_path)
+                
+                # Parse the report
+                metrics, details, usage_history, capacity_data, html_content = parse_battery_report(self.report_path)
+                self.html_content = html_content
+                
+                # Update the UI with the results
+                self.root.after(0, lambda: self.update_ui(metrics, details, usage_history, capacity_data))
+                
+                # Set status message
+                self.root.after(0, lambda: self.status_var.set("Report generated successfully."))
+                
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Error", f"Error generating report: {e}"))
+                self.root.after(0, lambda: self.status_var.set(f"Error: {str(e)}"))
+            finally:
+                # Re-enable buttons and stop progress
+                self.root.after(0, lambda: self.progress.stop())
+                self.root.after(0, lambda: self.progress.pack_forget())
+                self.root.after(0, lambda: self.generate_btn.configure(state=tk.NORMAL))
+                self.root.after(0, lambda: self.load_btn.configure(state=tk.NORMAL))
+                self.root.after(0, lambda: self.export_btn.configure(state=tk.NORMAL))
+                self.loading = False
+        
+        # Run the process in a separate thread
+        thread = threading.Thread(target=process)
+        thread.daemon = True
+        thread.start()
+
+    def load_report(self):
+        file_path = filedialog.askopenfilename(
+            title="Select Battery Report",
+            filetypes=[("HTML files", "*.html"), ("All files", "*.*")]
+        )
+        
+        if file_path:
+            self.loading = True
+            self.progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+            self.progress.start()
+            self.status_var.set("Loading battery report...")
+            self.generate_btn.configure(state=tk.DISABLED)
+            self.load_btn.configure(state=tk.DISABLED)
+            
+            def process():
+                try:
+                    self.report_path = file_path
+                    self.report_location_var.set(file_path)
+                    
+                    # Parse the existing report
+                    metrics, details, usage_history, capacity_data, html_content = parse_battery_report(file_path)
+                    self.html_content = html_content
+                    
+                    # Update the UI
+                    self.root.after(0, lambda: self.update_ui(metrics, details, usage_history, capacity_data))
+                    
+                    # Set status message
+                    self.root.after(0, lambda: self.status_var.set("Report loaded successfully."))
+                    
+                except Exception as e:
+                    self.root.after(0, lambda: messagebox.showerror("Error", f"Error loading report: {e}"))
+                    self.root.after(0, lambda: self.status_var.set(f"Error: {str(e)}"))
+                finally:
+                    # Re-enable buttons and stop progress
+                    self.root.after(0, lambda: self.progress.stop())
+                    self.root.after(0, lambda: self.progress.pack_forget())
+                    self.root.after(0, lambda: self.generate_btn.configure(state=tk.NORMAL))
+                    self.root.after(0, lambda: self.load_btn.configure(state=tk.NORMAL))
+                    self.root.after(0, lambda: self.export_btn.configure(state=tk.NORMAL))
+                    self.loading = False
+            
+            # Run the process in a separate thread
+            thread = threading.Thread(target=process)
+            thread.daemon = True
+            thread.start()
+
+    def update_ui(self, metrics, details, usage_history, capacity_data):
+        # Update metrics display
+        for key, label in self.metrics.items():
+            value = metrics.get(key, "N/A")
+            label.configure(text=value)
+        
+        # Update gauge
+        self.update_gauge(metrics)
+        
+        # Update capacity history
+        self.update_capacity_chart(capacity_data)
+        
+        # Update details tab
+        self.update_details(details)
+        
+        # Update usage history
+        self.update_usage_history(usage_history)
+        
+        # Update raw data tab
+        self.set_raw_text_content(self.html_content if self.html_content else "No data available")
+    
+    def update_gauge(self, metrics):
+        # Extract values for the gauge
+        design_capacity = metrics.get("Design Capacity", "0 mWh")
+        full_charge = metrics.get("Full Charge Capacity", "0 mWh")
+        
+        # Clear the current gauge if exists
+        if self.gauge_canvas:
+            self.gauge_canvas.get_tk_widget().destroy()
+            self.gauge_canvas = None
+        
+        if self.gauge_placeholder:
+            self.gauge_placeholder.pack_forget()
+            self.gauge_placeholder = None
+        
+        # Create the gauge figure
+        fig = create_battery_health_gauge(full_charge, design_capacity)
+        
+        # Add the figure to the frame
+        self.gauge_canvas = FigureCanvasTkAgg(fig, master=self.gauge_frame)
+        self.gauge_canvas.draw()
+        self.gauge_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+    
+    def update_capacity_chart(self, capacity_data):
+        periods, full_charges, design_capacities = capacity_data
+        
+        # Clear the current chart if exists
+        if self.chart_canvas:
+            self.chart_canvas.get_tk_widget().destroy()
+            self.chart_canvas = None
+        
+        if self.chart_placeholder:
+            self.chart_placeholder.pack_forget()
+            self.chart_placeholder = None
+        
+        # Create the capacity history chart
+        fig = plot_capacity_history(periods, full_charges, design_capacities)
+        
+        # Get the parent widget (the Capacity History LabelFrame)
+        parent = self.dashboard_tab.winfo_children()[1]
+        
+        # Add the figure to the frame
+        self.chart_canvas = FigureCanvasTkAgg(fig, master=parent)
+        self.chart_canvas.draw()
+        self.chart_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+    
+    def update_details(self, details):
+        # Clear existing details
+        for widget in self.details_content_frame.winfo_children():
+            widget.destroy()
+        
+        # Add details to the frame
+        row = 0
+        for key, value in details.items():
+            key_label = ttk.Label(self.details_content_frame, text=f"{key}:", font=("", 10, "bold"))
+            key_label.grid(row=row, column=0, sticky=tk.W, padx=10, pady=5)
+            
+            value_label = ttk.Label(self.details_content_frame, text=value)
+            value_label.grid(row=row, column=1, sticky=tk.W, padx=10, pady=5)
+            
+            row += 1
+    
+    def update_usage_history(self, usage_history):
+        # Clear existing items
+        for item in self.usage_tree.get_children():
+            self.usage_tree.delete(item)
+        
+        # Configure columns based on actual data
+        if usage_history and len(usage_history) > 0:
+            # Get the keys from the first history item
+            columns = list(usage_history[0].keys())
+            
+            # Configure columns
+            self.usage_tree["columns"] = columns
+            
+            # Remove old column headings
+            for col in self.usage_tree["columns"]:
+                self.usage_tree.heading(col, text="")
+                self.usage_tree.column(col, width=0)
+            
+            # Add new column headings
+            for col in columns:
+                display_name = col.replace("_", " ").title()
+                self.usage_tree.heading(col, text=display_name, anchor=tk.W)
+                self.usage_tree.column(col, anchor=tk.W, width=100)
+            
+            # Add data
+            for i, usage in enumerate(usage_history):
+                values = [usage.get(col, "") for col in columns]
+                self.usage_tree.insert("", tk.END, text=f"Item {i+1}", values=values)
+
+    def export_data(self):
+        if not self.report_path:
+            messagebox.showinfo("No Data", "No battery report has been generated or loaded yet.")
+            return
+        
+        # Ask for file location
+        file_path = filedialog.asksaveasfilename(
+            title="Export Battery Report Data",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            # Parse the report again to get fresh data
+            metrics, details, usage_history, capacity_data, _ = parse_battery_report(self.report_path)
+            
+            # Write to CSV
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write("Battery Report Data Export\n")
+                f.write(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                
+                # Write metrics
+                f.write("Battery Metrics\n")
+                for key, value in metrics.items():
+                    f.write(f"{key},{value}\n")
+                f.write("\n")
+                
+                # Write details
+                f.write("Battery Details\n")
+                for key, value in details.items():
+                    f.write(f"{key},{value}\n")
+                f.write("\n")
+                
+                # Write usage history
+                f.write("Battery Usage History\n")
+                if usage_history and len(usage_history) > 0:
+                    # Write header
+                    headers = list(usage_history[0].keys())
+                    f.write(",".join(headers) + "\n")
+                    
+                    # Write data
+                    for usage in usage_history:
+                        values = [str(usage.get(header, "")) for header in headers]
+                        f.write(",".join(values) + "\n")
+                f.write("\n")
+                
+                # Write capacity history
+                f.write("Battery Capacity History\n")
+                periods, full_charges, design_capacities = capacity_data
+                f.write("Period,Full Charge Capacity (mWh),Design Capacity (mWh)\n")
+                for i in range(len(periods)):
+                    f.write(f"{periods[i]},{full_charges[i]},{design_capacities[i]}\n")
+            
+            messagebox.showinfo("Export Successful", f"Data exported successfully to {file_path}")
+            
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export data: {e}")
+
+def main():
     root = tk.Tk()
-    app = BatteryHealthMonitorApp(root)
+    app = BatteryReportApp(root)
     root.mainloop()
 
 if __name__ == "__main__":
-    run_app()
+    main()
